@@ -1,62 +1,55 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from fastapi.responses import FileResponse
-import os
-import uuid
-import logging
 from elevenlabs.client import ElevenLabs
+import uuid
+import os
+import logging
 
-# 🧠 Hardcoded API key and voice config (as per your instruction)
-ELEVENLABS_API_KEY = "sk_fc04fe3c66fc91b73b5955dd83f6f5e412a07df736bfe74e"
-VOICE_ID = "1qEiC6qsybMkmnNdVMbK"  # Monika Sogam Hindi Modulated
-MODEL_ID = "eleven_multilingual_v2"
-
-# Static folder setup (Render requires this to exist)
-os.makedirs("static", exist_ok=True)
-
-# Logging setup
+# ----------------- Logging Setup -------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TTS-API")
 
-# FastAPI app
+# ----------------- FastAPI Setup -------------------
 app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Request body format
-class TTSRequest(BaseModel):
+# ----------------- ElevenLabs Setup ----------------
+api_key = "sk_fc04fe3c66fc91b73b5955dd83f6f5e412a07df736bfe74e"  # Not secret for this use case
+client = ElevenLabs(api_key=api_key)
+
+VOICE_ID = "1qEiC6qsybMkmnNdVMbK"  # Monika Sogam Hindi Modulated
+
+# ----------------- Request Schema ------------------
+class ScriptRequest(BaseModel):
     script: str
 
-# POST endpoint
+# ----------------- Main TTS Endpoint ----------------
 @app.post("/generate-audio")
-def generate_audio(data: TTSRequest):
-    script = data.script
-    logger.info("🎙️ Converting to speech: %s", script)
-
+async def generate_audio(request: ScriptRequest):
     try:
-        client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-        audio = client.text_to_speech.convert(
-            text=script,
+        logger.info(f"🎙️ Converting to speech: {request.script}")
+
+        audio_stream = client.text_to_speech.convert(
+            text=request.script,
             voice_id=VOICE_ID,
-            model_id=MODEL_ID,
-            output_format="mp3_44100_128"
+            model_id="eleven_multilingual_v2",
+            output_format="mp3_44100_128",
         )
 
-        filename = f"voice_{uuid.uuid4().hex}.mp3"
-        filepath = os.path.join("static", filename)
-        with open(filepath, "wb") as f:
-            f.write(audio)
+        # 🛠️ Convert generator to bytes
+        audio_bytes = b"".join(audio_stream)
 
-        logger.info("✅ Audio saved: %s", filepath)
-        return {"audio_url": f"/static/{filename}"}
+        file_id = f"voice_{uuid.uuid4().hex}.mp3"
+        file_path = os.path.join("static", file_id)
+
+        with open(file_path, "wb") as f:
+            f.write(audio_bytes)
+
+        logger.info(f"✅ Audio saved: {file_path}")
+        return JSONResponse(content={"audio_url": f"/static/{file_id}"})
 
     except Exception as e:
-        logger.error("❌ Failed to generate audio: %s", str(e))
-        raise HTTPException(status_code=500, detail="Audio generation failed")
-
-# Serve audio files
-@app.get("/static/{filename}")
-def serve_audio(filename: str):
-    filepath = os.path.join("static", filename)
-    if os.path.exists(filepath):
-        return FileResponse(filepath, media_type="audio/mpeg")
-    else:
-        raise HTTPException(status_code=404, detail="Audio file not found")
+        logger.error(f"❌ Failed to generate audio: {str(e)}")
+        return JSONResponse(status_code=500, content={"detail": "Audio generation failed"})
