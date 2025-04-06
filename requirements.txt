@@ -1,0 +1,3 @@
+fastapi
+uvicorn
+elevenlabs==1.0.0
